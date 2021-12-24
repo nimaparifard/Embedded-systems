@@ -1,100 +1,133 @@
-#define F_CPU 1000000UL
-
+#define F_CPU = 8000000
 #include <avr/io.h>
-#include <avr/pgmspace.h>
+#include <avr/interrupt.h>
 
-unsigned char sev_seg_nums[10] PROGMEM = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f};
+volatile uint8_t overflows;
+volatile uint8_t overflow_timer_0;
+volatile uint8_t seconds[4];
+volatile uint8_t state = 0;
 
-void timer1_init()
+// convert digit to 7seg pins
+char array[] = {0xC0, 0xF9, 0xA4, 0xB0, 0x99, 0x92, 0x82, 0xF8, 0x80, 0x90};
+
+void reset_timer()
 {
-    // prescaler = clk/64
-    TCCR1B |= (1 << CS11);
-    TCCR1B |= (1 << CS10);
-
-    // initialization of timer 1 register
-    TCNT1 = 0;
+    seconds[0] = 0;
+    seconds[1] = 0;
+    seconds[2] = 0;
+    seconds[3] = 0;
 }
 
-void timer0_init()
+// initialize timer1
+void initial_timer_1()
 {
-    //prescaler = clk/64
-    TCCR0 |= (1 << CS00) | (1 << CS01);
+    // prescaler = 8
+    TCCR1B |= _BV(CS11);
 
-    // initialization of timer 0 register
+    // counter set to 0
+    TCNT1 = 0;
+
+    // enable overflow interrupt
+    TIMSK |= _BV(TOIE1);
+
+    overflows = 0;
+}
+
+// initialize timer0
+void initial_timer_0()
+{
+    // prescaler = 8
+    TCCR0 |= _BV(CS11);
+
+    // counter set to 0
     TCNT0 = 0;
+
+    // enable overflow interrupt
+    TIMSK |= _BV(TOIE0);
+
+    overflow_timer_0 = 0;
+}
+
+ISR(TIMER1_OVF_vect)
+{
+    overflows++;
+}
+
+ISR(TIMER0_OVF_vect)
+{
+    overflow_timer_0++;
 }
 
 int main(void)
 {
-    DDRD = 0xff;
-    DDRC = 0x0f;
+    DDRC = 0xFF; // connect 7seg to PORTC
+    DDRD = 0xFF;
 
-    unsigned int ones = 0;
-    unsigned int tens = 0;
-    unsigned int hundreds = 0;
-    unsigned int thousends = 0;
+    PORTD = _BV(PORTD0); //turn on 7seg
 
-    unsigned int display_counter = 1;
+    initial_timer_1();
+    initial_timer_0();
+    sei();
 
-    PORTC = ~display_counter;
-
-    timer0_init();
-    timer1_init();
+    reset_timer();
 
     while (1)
     {
-        // 10 ms
-        if (TCNT0 >= 156) {
-            if (display_counter < 8) {
-                display_counter = display_counter << 1;
-                PORTC = ~(display_counter);
-            }
-            else {
-                display_counter = 0x01;
-                PORTC = ~(display_counter);
-            }
+        // 1s timer for increase timer
+        if (overflows >= 15)
+        {
+            if (TCNT1 >= 16960)
+            {
+                // first digit overflow check
+                if (seconds[0] > 8)
+                {
+                    seconds[0] = 0;
+                    seconds[1]++;
+                }
+                else
+                {
+                    seconds[0]++;
+                }
 
-            PORTD = pgm_read_byte(&(sev_seg_nums[3]));
+                // second digit overflow check
+                if (seconds[1] > 8)
+                {
+                    seconds[1] = 0;
+                    seconds[2]++;
+                }
 
-            if (display_counter & 1){
-                PORTD = pgm_read_byte(&(sev_seg_nums[ones]));
+                // third digit overflow check
+                if (seconds[2] > 8)
+                {
+                    seconds[2] = 0;
+                    seconds[3]++;
+                }
+
+                // fourth digit overflow check
+                if (seconds[3] > 8)
+                {
+                    reset_timer();
+                }
+
+                // reset counter & overflow
+                TCNT1 = 0;
+                overflows = 0;
             }
-
-            if (display_counter & 2){
-                PORTD = pgm_read_byte(&(sev_seg_nums[tens]));
-            }
-
-            if (display_counter & 4){
-                PORTD = pgm_read_byte(&(sev_seg_nums[hundreds]));
-            }
-
-            if (display_counter & 8){
-                PORTD = pgm_read_byte(&(sev_seg_nums[thousends]));
-            }
-
-            TCNT0 = 0;
         }
 
-        // 1 sec
-        if (TCNT1 >= 15625){
-            ones++;
-            tens += ones / 10;
-            ones = ones % 10;
 
-            hundreds += tens / 10;
-            tens = tens % 10;
+        // 0.02 timer for switch between 7segs
+        if (overflow_timer_0 >= 78)
+        {
+            if (TCNT0 >= 32)
+            {
+                PORTC = array[seconds[state]];
+                PORTD = _BV(state);
+                (state > 2) ? state = 0 : state++;
 
-            thousends += hundreds / 10;
-            hundreds = hundreds % 10;
-
-            if (thousends == 9 & hundreds == 9 & tens == 9 & ones == 9) {
-                ones = 0;
-                tens = 0;
-                hundreds = 0;
-                thousends = 0;
-            } 
-
-            TCNT1 = 0;
+                TCNT0 = 0;
+                overflow_timer_0 = 0;
+            }
         }
     }
 }
