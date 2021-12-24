@@ -1,38 +1,63 @@
-#define F_CPU 1000000UL
-
+#define F_CPU = 8000000
 #include <avr/io.h>
-#include <avr/pgmspace.h>
+#include <avr/interrupt.h>
 
-unsigned char sev_seg_nums[10] PROGMEM = {0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f};
+volatile uint8_t overflows;
+volatile uint8_t seconds = 0;
 
-void timer1_init()
+// this function map decimal to 7seg display
+int bcd_7seg(int digit)
 {
-    // prescaler = clk/64
-    TCCR1B |= (1 << CS11);
-    TCCR1B |= (1 << CS10);
+    char array[] = {0xC0, 0xF9, 0xA4, 0xB0, 0x99, 0x92, 0x82, 0xF8, 0x80, 0x90};
+    return array[digit];
+}
 
-    // initialization of timer 1 register
+// initialize timer1
+void initial_timer_1()
+{
+    // prescaler = 8
+    TCCR1B |= _BV(CS11);
+
+    // counter set to 0
     TCNT1 = 0;
+
+    // enable overflow interrupt
+    TIMSK |= _BV(TOIE1);
+
+    sei();
+
+    overflows = 0;
 }
 
 
+ISR(TIMER1_OVF_vect)
+{
+    overflows++;
+}
+
 int main(void)
 {
-    DDRD = 0xff;
-    
-    int i=0;
-    PORTD = pgm_read_byte(&(sev_seg_nums[i]));  
-    
-    timer1_init();
+    DDRC = 0xFF; // connect 7seg to PORTC
+    DDRD = 0xFF;
 
-    while(1)
-    {   
-        // 1 sec
-        if (TCNT1 >= 15625)
+    PORTD = _BV(PORTD7); //turn on 7seg
+    PORTC = bcd_7seg(0);
+
+    initial_timer_1();
+
+    while (1)
+    {
+        if (overflows >= 15)
         {
-            i++;
-            PORTD = pgm_read_byte(&(sev_seg_nums[i % 10]));   
-            TCNT1 = 0;             
-        }    
+            if (TCNT1 >= 16960)
+            {
+                (seconds > 8) ? seconds = 0 : seconds++;
+                PORTC = bcd_7seg(seconds);
+
+                // reset counter & overflow
+                TCNT1 = 0;
+                overflows = 0;
+            }
+        }
     }
 }
